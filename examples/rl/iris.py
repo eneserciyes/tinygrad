@@ -4,6 +4,8 @@ from typing import Tuple, Dict, List
 from types import SimpleNamespace
 from dataclasses import dataclass
 
+import tinygrad
+
 Batch = Dict[str, Tensor]
 
 
@@ -44,23 +46,35 @@ class ResAttnBlock:
       Tensor.zeros(embed_dim),
     )
 
-def attn(self, x: Tensor) -> Tensor:
-  query, key, value = [
-    x.linear(*y)
-    .reshape(shape=(x.shape[0], -1, self.num_heads, self.head_size))
-    .transpose(1, 2)
-    for y in [self.query, self.key, self.value]
-  ]
-  attention = Tensor.scaled_dot_product_attention(query, key, value).transpose(
-    1, 2
-  )
-  return attention.reshape(
-    shape=(x.shape[0], -1, self.num_heads * self.head_size)
-  ).linear(*self.out)
+  def attn(self, x: Tensor) -> Tensor:
+    query, key, value = [
+      x.linear(*y)
+      .reshape(shape=(x.shape[0], -1, self.num_heads, self.head_size))
+      .transpose(1, 2)
+      for y in [self.query, self.key, self.value]
+    ]
+    attention = Tensor.scaled_dot_product_attention(query, key, value).transpose(
+      1, 2
+    )
+    return attention.reshape(
+      shape=(x.shape[0], -1, self.num_heads * self.head_size)
+    ).linear(*self.out)
 
-def __call__(self, x: Tensor) -> Tensor:
-  return x + self.attn(x.layernorm())
+  def __call__(self, x: Tensor) -> Tensor:
+    return x + self.attn(x.layernorm())
 
+class Downsample:
+  def __init__(self, in_channels:int, with_conv:bool) -> None:
+    self.with_conv = with_conv
+    if self.with_conv:
+      self.conv = nn.Conv2d(in_channels, in_channels, 3, 2, 0)
+
+  def __call__(self, x: Tensor) -> Tensor:
+    if self.with_conv:
+      pad = (0, 1, 0, 1)
+      return self.conv(x.pad2d(pad, 0))
+
+    return x.avg_pool2d(kernel_size=(2, 2), stride=2)
 
 @dataclass
 class EncoderDecoderConfig:
@@ -96,27 +110,37 @@ class Encoder:
 
       down = SimpleNamespace()
       if i != self.num_resolutions - 1:
-        down.downsample = Downsample(block_in)  # TODO: implement Downsample
+        down.downsample = Downsample(block_in, with_conv=True)  # TODO: implement Downsample
         curr_res //= 2
 
       down.block = block
       down.attn = attn
       self.down.append(down)
 
-    self.mid = [
-      ResBlock(block_in, block_in),
-      ResAttnBlock(block_in, 1),
-      ResBlock(block_in, block_in),
-    ]
+    self.mid = SimpleNamespace()
+    self.mid.block_1 = ResBlock(block_in, block_in)
+    self.mid.attn_1 = ResAttnBlock(block_in, 1)
+    self.mid.block_2 = ResBlock(block_in, block_in)
     self.conv_out = nn.Conv2d(block_in, cfg.z_channels, 3, 1, 1)
+    self.norm_out = nn.GroupNorm(32, block_in, eps=1e-6, affine=True)
 
   def __call__(self, x: Tensor) -> Tensor:
     hs = [self.conv_in(x)]
     for i_level in range(self.num_resolutions):
-      for i_block in range(self.config.num_res_blocks):
-        h = self.down[i_level][0][i_block](hs[-1])
-        if len(self.down[i_level][1]) > 0:
-          h = self.down[i_level][1][i_block](h)
+      for i_block in range(self.cfg.num_res_blocks):
+        h = self.down[i_level].block[i_block](hs[-1])
+        if len(self.down[i_level].attn) > 0:
+          h = self.down[i_level].attn[i_block](h)
+        hs.append(h)
+        if i_level != self.num_resolutions - 1:
+          hs.append(self.down[i_level].downsample(hs[-1]))
+    # mid
+    h = hs[-1]
+    h = self.mid.block_2(self.mid.attn(self.mid.block_1(h)))
+
+    h = self.norm_out(h)
+    h = self.conv_out(h)
+    return h
 
 
 class Tokenizer:
@@ -130,7 +154,7 @@ class Tokenizer:
   ) -> None:
     self.vocab_size = vocab_size
     self.encoder = encoder
-    self.pre_quant_conv = nn.Conv2d(encoder.config.z_channels, embed_dim, 1)
+    self.pre_quant_conv = nn.Conv2d(encoder.cfg.z_channels, embed_dim, 1)
     self.embedding = nn.Embedding(vocab_size, embed_dim)
     self.post_quant_conv = nn.Conv2d(embed_dim, decoder.config.z_channels, 1)
     self.decoder = decoder
