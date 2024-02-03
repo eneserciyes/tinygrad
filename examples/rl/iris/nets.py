@@ -1,8 +1,147 @@
+from types import SimpleNamespace
 from tinygrad import Tensor, nn
-from typing import Optional
+from typing import Optional, List
 from itertools import chain
+from dataclasses import dataclass
 
 def swish(x: Tensor): return x.mul(x.sigmoid())
+
+
+@dataclass
+class EncoderDecoderConfig:
+  resolution: int
+  in_channels: int
+  z_channels: int
+  ch: int
+  ch_mult: List[int]
+  num_res_blocks: int
+  attn_resolutions: List[int]
+  out_ch: int
+  dropout: float
+
+class Encoder:
+  def __init__(self, config: EncoderDecoderConfig) -> None:
+    self.config = config
+    self.num_resolutions = len(config.ch_mult)
+    temb_ch = 0
+
+    self.conv_in = nn.Conv2d(config.in_channels, config.ch, 3, 1, 1)
+    curr_res = config.resolution
+    in_ch_mult = (1,) + tuple(config.ch_mult)
+    self.down=[]
+    for i_level in range(self.num_resolutions):
+        block = []
+        attn = []
+        block_in = config.ch * in_ch_mult[i_level]
+        block_out = config.ch * in_ch_mult[i_level + 1]
+        for i_block in range(config.num_res_blocks):
+            block.append(ResnetBlock(block_in, block_out, dropout=config.dropout, temb_channels=temb_ch))
+            block_in = block_out
+            if curr_res in config.attn_resolutions:
+                attn.append(ResAttnBlock(block_in))
+        down = SimpleNamespace()
+        down.block=block
+        down.attn=attn
+        if i_level != self.num_resolutions - 1:
+            down.downsample = Downsample(block_in, with_conv=True)
+            curr_res //= 2
+        self.down.append(down)
+
+    self.mid = SimpleNamespace()
+    self.mid.block_1 = ResnetBlock(block_in, block_in, dropout=config.dropout, temb_channels=temb_ch)
+    self.mid.attn_1 = ResAttnBlock(block_in)
+    self.mid.block_2 = ResnetBlock(block_in, block_in, dropout=config.dropout, temb_channels=temb_ch)
+
+    self.norm_out = nn.GroupNorm(num_groups=32, num_channels=block_in, eps=1e-6, affine=True)
+    self.conv_out = nn.Conv2d(block_in, config.z_channels, 3, 1, 1)
+
+  def __call__(self, x: Tensor) -> Tensor:
+    temb = None
+    hs = [self.conv_in(x)]
+    for i_level in range(self.num_resolutions):
+        for i_block in range(self.config.num_res_blocks):
+            h = self.down[i_level].block[i_block](hs[-1], temb)
+            if len(self.down[i_level].attn) > 0:
+                h = self.down[i_level].attn[i_block](h)
+            hs.append(h)
+        if i_level != self.num_resolutions - 1:
+            hs.append(self.down[i_level].downsample(hs[-1]))
+    # middle
+    h = hs[-1]
+    h = self.mid.block_1(h, temb)
+    h = self.mid.attn_1(h)
+    h = self.mid.block_2(h, temb)
+
+    # end
+    h = self.norm_out(h)
+    h = swish(h)
+    h = self.conv_out(h)
+    return h
+
+class Decoder:
+  def __init__(self, config: EncoderDecoderConfig):
+    self.config = config
+    temb_ch = 0
+    self.num_resolutions = len(config.ch_mult)
+
+    in_ch_mult = (1,) + tuple(config.ch_mult)
+    block_in = config.ch * config.ch_mult[self.num_resolutions-1]
+    curr_res = config.resolution // 2 ** (self.num_resolutions - 1)
+    print(f"Tokenizer : shape of latent is {config.z_channels, curr_res, curr_res}.")
+
+    # z to block_in
+    self.conv_in = nn.Conv2d(config.z_channels, block_in, 3, 1, 1)
+
+    self.mid = SimpleNamespace()
+    self.mid.block_1 = ResnetBlock(block_in, block_in, dropout=config.dropout, temb_channels=temb_ch)
+    self.mid.attn_1 = ResAttnBlock(block_in)
+    self.mid.block_2 = ResnetBlock(block_in, block_in, dropout=config.dropout, temb_channels=temb_ch)
+
+    self.up = []
+    for i_level in reversed(range(self.num_resolutions)):
+      block = []
+      attn = []
+      block_out = config.ch * in_ch_mult[i_level]
+      for _ in range(config.num_res_blocks+1):
+        block.append(ResnetBlock(block_in, block_out, dropout=config.dropout, temb_channels=temb_ch))
+        block_in = block_out
+        if curr_res in config.attn_resolutions:
+          attn.append(ResAttnBlock(block_in))
+      up = SimpleNamespace()
+      up.block = block
+      up.attn = attn
+      if i_level != 0:
+        up.upsample = Upsample(block_in, with_conv=True)
+        curr_res *= 2
+      self.up.insert(0, up) # prepend to get the order right
+
+    self.norm_out = nn.GroupNorm(num_groups=32, num_channels=block_in, eps=1e-6, affine=True)
+
+    self.conv_out = nn.Conv2d(block_in, config.out_ch, 3, 1, 1)
+
+
+  def __call__(self, z: Tensor) -> Tensor:
+    temb = None
+    h = self.conv_in(z)
+
+    # middle
+    h = self.mid.block_1(h, temb)
+    h = self.mid.attn_1(h)
+    h = self.mid.block_2(h, temb)
+
+    # up
+    for i_level in reversed(range(self.num_resolutions)):
+      for i_block in range(self.config.num_res_blocks):
+        h = self.up[i_level].block[i_block](h, temb)
+        if len(self.up[i_level].attn) > 0:
+          h = self.up[i_level].attn[i_block](h)
+      if i_level != 0:
+        h = self.up[i_level].upsample(h)
+
+    h = self.norm_out(h)
+    h = swish(h)
+    h = self.conv_out(h)
+    return h
 
 # taken from "https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py" (now 3 models use nearest upsampling)
 def upsample(x: Tensor, scale_factor: float) -> Tensor:

@@ -7,6 +7,7 @@ from tinygrad import Tensor
 
 class TestResnetBlock(unittest.TestCase):
   def test_forward(self):
+    breakpoint()
     res_block = ResnetBlock(in_channels=32, out_channels=32, temb_channels=0, dropout=0.)
     x = Tensor(np.load("test_files/resblock_in.npy"))
     y = res_block(x, None)
