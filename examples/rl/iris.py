@@ -21,61 +21,6 @@ class Loss:
     return self
 
 
-class ResAttnBlock:
-  def __init__(self, embed_dim: int, num_heads: int) -> None:
-    assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
-
-    self.num_heads = num_heads
-    self.head_size = embed_dim // num_heads
-
-    self.query = (
-      Tensor.scaled_uniform(embed_dim, embed_dim),
-      Tensor.zeros(embed_dim),
-    )
-    self.key = (
-      Tensor.scaled_uniform(embed_dim, embed_dim),
-      Tensor.zeros(embed_dim),
-    )
-    self.value = (
-      Tensor.scaled_uniform(embed_dim, embed_dim),
-      Tensor.zeros(embed_dim),
-    )
-
-    self.out = (
-      Tensor.scaled_uniform(embed_dim, embed_dim),
-      Tensor.zeros(embed_dim),
-    )
-
-  def attn(self, x: Tensor) -> Tensor:
-    query, key, value = [
-      x.linear(*y)
-      .reshape(shape=(x.shape[0], -1, self.num_heads, self.head_size))
-      .transpose(1, 2)
-      for y in [self.query, self.key, self.value]
-    ]
-    attention = Tensor.scaled_dot_product_attention(query, key, value).transpose(
-      1, 2
-    )
-    return attention.reshape(
-      shape=(x.shape[0], -1, self.num_heads * self.head_size)
-    ).linear(*self.out)
-
-  def __call__(self, x: Tensor) -> Tensor:
-    return x + self.attn(x.layernorm())
-
-class Downsample:
-  def __init__(self, in_channels:int, with_conv:bool) -> None:
-    self.with_conv = with_conv
-    if self.with_conv:
-      self.conv = nn.Conv2d(in_channels, in_channels, 3, 2, 0)
-
-  def __call__(self, x: Tensor) -> Tensor:
-    if self.with_conv:
-      pad = (0, 1, 0, 1)
-      return self.conv(x.pad2d(pad, 0))
-
-    return x.avg_pool2d(kernel_size=(2, 2), stride=2)
-
 @dataclass
 class EncoderDecoderConfig:
   resolution: int
