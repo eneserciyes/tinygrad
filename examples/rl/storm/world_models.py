@@ -138,3 +138,108 @@ class WorldModel:
     dist = Categorical(logits=logits)
     return dist.onehot_sample() + dist.probs - dist.probs.detach()
 
+  def calc_last_dist_feat(self, latent: Tensor, action: Tensor):
+    temporal_mask = (1 - Tensor.triu(Tensor.ones(1, latent.shape[1], latent.shape[1]), k=1)) == 1
+    dist_feat = self.storm_transformer(latent, action, temporal_mask)
+    last_dist_feat = dist_feat[:, -1:]
+    prior_logits = self.dist_head.forward_prior(last_dist_feat)
+    prior_sample = self.straight_through_gradient(prior_logits)
+    prior_flattened_sample = prior_sample.flatten(2)
+    return prior_flattened_sample, last_dist_feat
+
+  def predict_next(self, last_flattened_sample, action, log_video=True):
+    dist_feat = self.storm_transformer.forward_with_kv_cache(last_flattened_sample, action)
+    prior_logits = self.dist_head.forward_prior(dist_feat)
+    # decoding
+    prior_sample = self.straight_through_gradient(prior_logits)
+    prior_flattened_sample = prior_sample.flatten(2)
+    if log_video:
+        obs_hat = self.image_decoder(prior_flattened_sample)
+    else:
+        obs_hat = None
+    reward_hat = self.reward_decoder(dist_feat)
+    reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
+    termination_hat = self.termination_decoder(dist_feat)
+    termination_hat = termination_hat > 0
+    return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
+
+  def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype):
+    print(f"init imagine_buffer: {imagine_batch_size}x{imagine_batch_length}@{dtype}")
+    self.imagine_batch_size = imagine_batch_size
+    self.imagine_batch_length = imagine_batch_length
+    latent_size = (imagine_batch_size, imagine_batch_length+1, self.stoch_flattened_dim)
+    hidden_size = (imagine_batch_size, imagine_batch_length+1, self.transformer_hidden_dim)
+    scalar_size = (imagine_batch_size, imagine_batch_length)
+    self.latent_buffer = Tensor.zeros(*latent_size, dtype=dtype)
+    self.hidden_buffer = Tensor.zeros(*hidden_size, dtype=dtype)
+    self.action_buffer = Tensor.zeros(*scalar_size, dtype=dtype)
+    self.reward_hat_buffer = Tensor.zeros(*scalar_size, dtype=dtype)
+    self.termination_hat_buffer = Tensor.zeros(*scalar_size, dtype=dtype)
+
+  def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
+                   imagine_batch_size, imagine_batch_length, log_video, logger):
+    self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.dtype)
+    obs_hat_list = []
+    self.storm_transformer.reset_kv_cache_list(imagine_batch_size, dtype=self.dtype)
+    context_latent = self.encode_obs(sample_obs)
+    for i in range(sample_obs.shape[1]):
+      last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
+        context_latent[:, i:i+1], sample_action[:, i:i+1], log_video=log_video)
+    self.latent_buffer[:, 0:1] = last_latent
+    self.hidden_buffer[:, 0:1] = last_dist_feat
+
+    # imagine
+    for i in range(imagine_batch_length):
+      action = agent.sample(Tensor.cat(self.latent_buffer[:, i:i+1], self.hidden_buffer[:, i:i+1], dim=-1))
+      self.action_buffer[:, i:i+1] = action
+      last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
+        self.latent_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=log_video)
+
+      self.latent_buffer[:, i+1:i+2] = last_latent
+      self.hidden_buffer[:, i+1:i+2] = last_dist_feat
+      self.reward_hat_buffer[:, i:i+1] = last_reward_hat
+      self.termination_hat_buffer[:, i:i+1] = last_termination_hat
+      if log_video:
+        obs_hat_list.append(last_obs_hat[::imagine_batch_size//16])
+
+    if log_video:
+      logger.log("Imagine/predict_video", obs_hat_list[0].cat(*obs_hat_list[1:], dim=1).clip(0, 1).float().detach().numpy())
+
+    return self.latent_buffer.cat(self.hidden_buffer, dim=-1), self.action_buffer, self.reward_hat_buffer, self.termination_hat_buffer
+
+  def update(self, obs: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
+    _, batch_length = obs.shape[:2]
+    embedding = self.encoder(obs)
+    post_logits = self.dist_head.forward_post(embedding)
+    sample = self.straight_through_gradient(post_logits)
+    flattened_sample = sample.flatten(2)
+
+    # decoding image
+    obs_hat = self.image_decoder(flattened_sample)
+
+    # transformer
+    temporal_mask = (1 - Tensor.triu(Tensor.ones(1, batch_length, batch_length), k=1)) == 1
+    dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
+    prior_logits = self.dist_head.forward_prior(dist_feat)
+    reward_hat = self.reward_decoder(dist_feat)
+    termination_hat = self.termination_decoder(dist_feat)
+
+    # env loss
+    reconstruction_loss = (obs_hat - obs).sum(axis=(2,3,4)).pow(2).mean()
+    reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
+    # BCE with logits loss
+    termination_loss = (termination.float() * termination_hat.sigmoid().log() + (1 - termination).float() * (1 - termination_hat.sigmoid()).log()).mean()
+
+    # dyn-rep loss
+    dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
+    representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
+    total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss
+
+    total_loss.backward()
+
+    # TODO: check if grad scaler exists in Tinygrad.
+    # TODO: check how to optimize
+
+
+
+
