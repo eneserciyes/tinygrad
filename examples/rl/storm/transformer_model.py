@@ -25,7 +25,7 @@ class StochasticTransformer:
     return self.head(feats)
 
 class StochasticTransformerKVCache:
-  def __init__(self, stoch_dim: int, action_dim:int, feat_dim: int, num_layers: int, num_heads: int, max_length: int, dropout: int):
+  def __init__(self, stoch_dim: int, action_dim:int, feat_dim: int, num_layers: int, num_heads: int, max_length: int, dropout: float):
     self.action_dim = action_dim
     self.feat_dim = feat_dim
 
