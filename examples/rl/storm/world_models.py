@@ -239,6 +239,16 @@ class WorldModel:
 
     # TODO: check if grad scaler exists in Tinygrad.
     # TODO: check how to optimize
+    if logger is not None:
+      logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())
+      logger.log("WorldModel/reward_loss", reward_loss.item())
+      logger.log("WorldModel/termination_loss", termination_loss.item())
+      logger.log("WorldModel/dynamics_loss", dynamics_loss.item())
+      logger.log("WorldModel/dynamics_real_kl_div", dynamics_real_kl_div.item())
+      logger.log("WorldModel/representation_loss", representation_loss.item())
+      logger.log("WorldModel/representation_real_kl_div", representation_real_kl_div.item())
+      logger.log("WorldModel/total_loss", total_loss.item())
+
 
 
 

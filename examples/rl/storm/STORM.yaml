@@ -1,0 +1,39 @@
+task: "JointTrainAgent"
+
+basic_settings:
+  seed: 0
+  image_size: 64
+  replay_buffer_on_GPU: True
+
+joint_train_agent:
+  sample_max_steps: 102000
+  buffer_max_length: 100000
+  buffer_warmup: 1024
+  num_envs: 1
+  batch_size: 16
+  demonstration_batch_size: 4
+  batch_length: 64
+  imagine_batch_size: 1024
+  imagine_demonstration_batch_size: 256
+  imagine_context_length: 8
+  imagine_batch_length: 16
+  train_dynamics_every_steps: 1
+  train_agent_every_steps: 1
+  use_demonstration: false
+  save_every_steps: 2500
+
+models:
+  world_model:
+    in_channels: 3
+    transformer_max_length: 64
+    transformer_hidden_dim: 512
+    transformer_num_layers: 2
+    transformer_num_heads: 8
+
+  agent:
+    num_layers: 2
+    hidden_dim: 512
+    gamma: 0.985
+    lambd: 0.95
+    entropy_coef: 3e-4
+
