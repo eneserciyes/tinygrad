@@ -1,5 +1,7 @@
 from tinygrad import Tensor, nn
 import tinygrad
+from tinygrad.nn.optim import Adam
+from tinygrad.nn.state import get_parameters
 
 from transformer_model import StochasticTransformerKVCache
 from distributions import Categorical, CategoricalKLDivLossWithFreeBits
@@ -129,7 +131,8 @@ class WorldModel:
     self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
     self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
 
-    # TODO: add optimizer here
+    self.optimizer = Adam(get_parameters(self), lr=1e-4)
+    # TODO: grad scaler, bf16 training
 
   def encode_obs(self, obs: Tensor) -> Tensor:
     embedding = self.encoder(obs)

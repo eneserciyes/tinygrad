@@ -174,7 +174,6 @@ if __name__ == "__main__":
   np.random.seed(args.seed)
   Tensor.manual_seed(args.seed)
 
-  # TODO: seed everything
   logger = None # TODO: implement logger
   os.makedirs(f"runs/{args.n}", exist_ok=True) # until logger is implemented
   shutil.copy(args.config_path, f"runs/{args.n}/config.yaml")
@@ -197,7 +196,6 @@ if __name__ == "__main__":
     print(colorama.Fore.MAGENTA + f"loading demonstration trajectory from {args.trajectory_path}" + colorama.Style.RESET_ALL)
     replay_buffer.load_trajectory(path=args.trajectory_path)
 
-  breakpoint()
   joint_train_world_model_agent(
     env_name=args.env_name, num_envs=conf.joint_train_agent.num_envs,
     max_steps=conf.joint_train_agent.sample_max_steps, image_size=conf.basic_settings.image_size,
