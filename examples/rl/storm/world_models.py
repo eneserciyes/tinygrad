@@ -4,6 +4,7 @@ import tinygrad
 from transformer_model import StochasticTransformerKVCache
 from distributions import Categorical, CategoricalKLDivLossWithFreeBits
 from functions_losses import SymLogTwoHotLoss
+import agents
 
 class EncoderBN:
   def __init__(self, in_channels: int, stem_channels: int, final_feature_width: int) -> None:
@@ -127,6 +128,8 @@ class WorldModel:
 
     self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
     self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
+
+    # TODO: add optimizer here
 
   def encode_obs(self, obs: Tensor) -> Tensor:
     embedding = self.encoder(obs)

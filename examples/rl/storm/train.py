@@ -83,7 +83,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
         action = agent.sample_as_env_action(
             prior_flattened_sample.cat(last_dist_feat, dim=1), greedy=False)
 
-      context_obs.append(Tensor(current_obs).unsqueeze(1) / 255)
+      context_obs.append(Tensor(current_obs).permute(0, 3, 1, 2).unsqueeze(1) / 255)
       context_action.append(action)
     else:
       action = vec_env.action_space.sample()
@@ -129,8 +129,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
         log_video=log_video, logger=logger
       )
 
-      agent.update(latent=imagine_latent, action=agent_action, old_logprob=agent_logprob,
-        old_value=agent_value, reward=imagine_reward, termination=imagine_termination, logger=logger)
+      agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
 
     if total_steps % (save_every_steps//num_envs) == 0:
       print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
@@ -172,12 +171,16 @@ if __name__ == "__main__":
   conf = OmegaConf.load(args.config_path)
   print(colorama.Fore.RED + str(args) + colorama.Style.RESET_ALL)
 
+  np.random.seed(args.seed)
+  Tensor.manual_seed(args.seed)
+
   # TODO: seed everything
   logger = None # TODO: implement logger
+  os.makedirs(f"runs/{args.n}", exist_ok=True) # until logger is implemented
   shutil.copy(args.config_path, f"runs/{args.n}/config.yaml")
 
   dummy_env = build_single_env(args.env_name, conf.basic_settings.image_size, seed=0)
-  action_dim = dummy_env.action_space.n
+  action_dim = dummy_env.action_space.n.item()
   del dummy_env
 
   world_model = build_world_model(conf, action_dim)
@@ -190,21 +193,22 @@ if __name__ == "__main__":
       warmup_length=conf.joint_train_agent.buffer_warmup,
   )
 
-  if conf.joint_train_agent.use_demonstation:
+  if conf.joint_train_agent.use_demonstration:
     print(colorama.Fore.MAGENTA + f"loading demonstration trajectory from {args.trajectory_path}" + colorama.Style.RESET_ALL)
     replay_buffer.load_trajectory(path=args.trajectory_path)
 
+  breakpoint()
   joint_train_world_model_agent(
     env_name=args.env_name, num_envs=conf.joint_train_agent.num_envs,
-    max_steps=conf.joint_train_agent.max_steps, image_size=conf.basic_settings.image_size,
+    max_steps=conf.joint_train_agent.sample_max_steps, image_size=conf.basic_settings.image_size,
     replay_buffer=replay_buffer, world_model=world_model, agent=agent,
     train_dynamics_every_steps=conf.joint_train_agent.train_dynamics_every_steps,
     train_agent_every_steps=conf.joint_train_agent.train_agent_every_steps,
     batch_size=conf.joint_train_agent.batch_size,
-    demonstration_batch_size=conf.joint_train_agent.demonstration_batch_size if conf.joint_train_agent.use_demonstation else 0,
+    demonstration_batch_size=conf.joint_train_agent.demonstration_batch_size if conf.joint_train_agent.use_demonstration else 0,
     batch_length=conf.joint_train_agent.batch_length,
     imagine_batch_size=conf.joint_train_agent.imagine_batch_size,
-    imagine_demonstration_batch_size=conf.joint_train_agent.imagine_demonstration_batch_size if conf.joint_train_agent.use_demonstation else 0,
+    imagine_demonstration_batch_size=conf.joint_train_agent.imagine_demonstration_batch_size if conf.joint_train_agent.use_demonstration else 0,
     imagine_context_length=conf.joint_train_agent.imagine_context_length,
     imagine_batch_length=conf.joint_train_agent.imagine_batch_length,
     save_every_steps=conf.joint_train_agent.save_every_steps,
