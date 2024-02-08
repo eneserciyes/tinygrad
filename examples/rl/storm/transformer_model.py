@@ -47,7 +47,7 @@ class StochasticTransformerKVCache:
     for layer in self.layer_stack:
       feats = layer(feats, feats, feats, mask)
 
-    return self.head(feats)
+    return feats
 
   def reset_kv_cache_list(self, batch_size, dtype):
     self.kv_cache_list = []

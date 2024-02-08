@@ -30,7 +30,7 @@ class MultiHeadAttention:
     q = q.transpose(1, 2).contiguous().reshape(bs, qs, -1)
     q = self.fc(q).dropout(self.dropout) + residual
 
-    return q.layer_norm()
+    return q.layernorm()
 
 class PositionwiseFeedForward:
   def __init__(self, d_in, d_hid, dropout=0.1):
@@ -40,7 +40,7 @@ class PositionwiseFeedForward:
 
   def __call__(self, x):
     x = x + x.linear(*self.fc1).relu().linear(*self.fc2).dropout(self.dropout)
-    return x.layer_norm()
+    return x.layernorm()
 
 class AttentionBlock:
   def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
@@ -69,8 +69,8 @@ class PositionalEncoding1D:
     self.pos_emb = nn.Embedding(max_length, embed_dim)
 
   def __call__(self, feat):
-    pos_emb = self.pos_emb(Tensor.arange(self.max_length))
-    pos_emb = pos_emb.unsqueeze(0).repeat((feat.shape[0], 1, 1))
+    pos_emb = self.pos_emb(Tensor.arange(self.max_length).reshape(1, -1))
+    pos_emb = pos_emb.repeat((feat.shape[0], 1, 1))
     return feat + pos_emb[:, :feat.shape[1], :]
 
   def forward_with_position(self, feat, position):

@@ -19,9 +19,9 @@ class EncoderBN:
     self.bns = []
     while True:
       self.convs.append(nn.Conv2d(channels, channels*2, 4, 2, 1, bias=False))
-      self.bns.append(nn.BatchNorm2d(stem_channels))
       channels *= 2
       feature_width //= 2
+      self.bns.append(nn.BatchNorm2d(channels))
       if feature_width == final_feature_width:
         break
 
@@ -33,7 +33,7 @@ class EncoderBN:
     x = self.bn_in(self.conv_in(x)).relu()
     for (conv, bn) in zip(self.convs, self.bns):
       x = bn(conv(x)).relu()
-    return x.reshape(B, L, *x.shape[1:])
+    return x.reshape(B, L, -1)
 
 class DecoderBN:
   def __init__(self, stoch_dim: int, last_channels: int, original_in_channels: int, stem_channels: int, final_feature_width: int) -> None:
@@ -61,7 +61,8 @@ class DecoderBN:
     obs_hat = self.bn_in(stem).relu()
     for (conv, bn) in zip(self.convs, self.bns):
       obs_hat = bn(conv(obs_hat)).relu()
-    return self.conv_out(obs_hat)
+    obs_hat = self.conv_out(obs_hat)
+    return obs_hat.reshape(B, L, *obs_hat.shape[1:])
 
 class DistHead:
   def __init__(self, image_feat_dim: int, transformer_hidden_dim: int, stoch_dim: int) -> None:
@@ -222,6 +223,7 @@ class WorldModel:
 
     # decoding image
     obs_hat = self.image_decoder(flattened_sample)
+    breakpoint()
 
     # transformer
     temporal_mask = (1 - Tensor.triu(Tensor.ones(1, batch_length, batch_length), k=1)) == 1
