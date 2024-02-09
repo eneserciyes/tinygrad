@@ -233,7 +233,7 @@ class WorldModel:
     termination_hat = self.termination_decoder(dist_feat)
 
     # env loss
-    reconstruction_loss = (obs_hat - obs).sum(axis=(2,3,4)).pow(2).mean()
+    reconstruction_loss = (obs_hat - obs).pow(2).sum(axis=(2,3,4)).mean()
     reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
     # BCE with logits loss
     termination_loss = (termination.float() * termination_hat.sigmoid().log() + (1 - termination).float() * (1 - termination_hat.sigmoid()).log()).mean()

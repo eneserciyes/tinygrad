@@ -37,8 +37,8 @@ def build_vec_env(env_name, image_size, num_envs, seed):
 
 def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, demonstration_batch_size, batch_length, logger):
   obs, action, reward, termination = replay_buffer.sample(batch_size, demonstration_batch_size, batch_length)
-  world_model.update(obs, action, reward, termination, logger=logger)
-
+  with Tensor.train():
+    world_model.update(obs, action, reward, termination, logger=logger)
 
 def world_model_imagine_data(replay_buffer: ReplayBuffer, world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
@@ -59,6 +59,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                                   batch_size, demonstration_batch_size, batch_length,
                                   imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
                                   imagine_batch_length, save_every_steps, seed, logger):
+  breakpoint()
   # create ckpt dir
   os.makedirs(f"ckpt/{args.n}", exist_ok=True)
   # create env
