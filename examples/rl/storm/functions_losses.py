@@ -12,9 +12,18 @@ def symlog_loss(output: Tensor, target: Tensor):
   target = symlog(target)
   return 0.5 * (output - target).pow(2).mean()
 
-# TODO: implement bucketize
-def bucketize(x: Tensor, bins: Tensor):
-  return Tensor.ones(*bins.shape)
+
+def bucketize(x, boundaries):
+  """
+  Bucketize the input tensor x based on the boundaries
+  Boundaries must be sorted in ascending order!
+  """
+  # Create a tensor of the same shape as x with the boundaries repeated
+  b = boundaries.repeat((*x.shape, 1))
+  d = x.unsqueeze(-1) - b
+  # count the number of distances that are greater than 0
+  return (d > 0).sum(-1)
+
 
 class SymLogTwoHotLoss:
   def __init__(self, num_classes:int, lower_bound: float, upper_bound: float):
@@ -26,10 +35,10 @@ class SymLogTwoHotLoss:
 
   def __call__(self, output: Tensor, target: Tensor):
     target = symlog(target)
-    assert target.min() >= self.lower_bound and target.max() <= self.upper_bound
+    assert target.min() > self.lower_bound and target.max() <= self.upper_bound
 
     index = bucketize(target, self.bins)
-    diff = target - self.bins[index-1] # bucketize mimics torch.bucketize behavior
+    diff = target - self.bins[index-1] # get lower bound
     weight = diff / self.bin_length
     weight = weight.clip(0, 1).unsqueeze(-1)
 

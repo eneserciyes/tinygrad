@@ -1,12 +1,14 @@
+import sys
 from tinygrad import Tensor, nn
 import tinygrad
 from tinygrad.nn.optim import Adam
 from tinygrad.nn.state import get_parameters
 
 from transformer_model import StochasticTransformerKVCache
-from distributions import Categorical, CategoricalKLDivLossWithFreeBits
+from distributions import kl_categorical_with_free_bits
 from functions_losses import SymLogTwoHotLoss
 import agents
+
 
 class EncoderBN:
   def __init__(self, in_channels: int, stem_channels: int, final_feature_width: int) -> None:
@@ -130,7 +132,6 @@ class WorldModel:
     self.termination_decoder = TerminationDecoder(transformer_hidden_dim=transformer_hidden_dim)
 
     self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
-    self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
 
     self.optimizer = Adam(get_parameters(self), lr=1e-4)
     # TODO: grad scaler, bf16 training
@@ -142,8 +143,10 @@ class WorldModel:
     return sample.flatten(2)
 
   def straight_through_gradient(self, logits: Tensor) -> Tensor:
-    dist = Categorical(logits=logits)
-    return dist.onehot_sample() + dist.probs - dist.probs.detach()
+    probs = logits.softmax()
+    s: Tensor = (probs.cumsum(-1) > Tensor.rand(*probs.shape[:-1], 1)).argmax(-1)
+    s = s.one_hot(s.shape[-1])
+    return s.detach() + probs - probs.detach()
 
   def calc_last_dist_feat(self, latent: Tensor, action: Tensor):
     temporal_mask = (1 - Tensor.triu(Tensor.ones(1, latent.shape[1], latent.shape[1]), k=1)) == 1
@@ -223,7 +226,6 @@ class WorldModel:
 
     # decoding image
     obs_hat = self.image_decoder(flattened_sample)
-    breakpoint()
 
     # transformer
     temporal_mask = (1 - Tensor.triu(Tensor.ones(1, batch_length, batch_length), k=1)) == 1
@@ -236,13 +238,15 @@ class WorldModel:
     reconstruction_loss = (obs_hat - obs).pow(2).sum(axis=(2,3,4)).mean()
     reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
     # BCE with logits loss
-    termination_loss = (termination.float() * termination_hat.sigmoid().log() + (1 - termination).float() * (1 - termination_hat.sigmoid()).log()).mean()
+    termination_loss = -(termination.float() * termination_hat.sigmoid().log() + (1 - termination).float() * (1 - termination_hat.sigmoid()).log()).mean()
 
     # dyn-rep loss
-    dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
-    representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
+    dynamics_loss, dynamics_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:].detach(), prior_logits[:, :-1], free_bits=1)
+    representation_loss, representation_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:], prior_logits[:, :-1].detach(), free_bits=1)
     total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss
 
+    print("total_loss", total_loss.item())
+    sys.exit(0)
     total_loss.backward()
 
     # TODO: check if grad scaler exists in Tinygrad.

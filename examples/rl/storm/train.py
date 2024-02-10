@@ -59,7 +59,6 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                                   batch_size, demonstration_batch_size, batch_length,
                                   imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
                                   imagine_batch_length, save_every_steps, seed, logger):
-  breakpoint()
   # create ckpt dir
   os.makedirs(f"ckpt/{args.n}", exist_ok=True)
   # create env
