@@ -10,7 +10,7 @@ joint_train_agent:
   buffer_max_length: 100000
   buffer_warmup: 1024
   num_envs: 1
-  batch_size: 16
+  batch_size: 1
   demonstration_batch_size: 4
   batch_length: 64
   imagine_batch_size: 1024

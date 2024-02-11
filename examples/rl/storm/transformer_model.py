@@ -35,7 +35,6 @@ class StochasticTransformerKVCache:
     self.layer_stack = [
         AttentionBlockKVCache(feat_dim=feat_dim, hidden_dim=feat_dim*2, num_heads=num_heads, dropout=dropout) for _ in range(num_layers)
     ]
-    self.head = nn.Linear(feat_dim, stoch_dim)
     self.kv_cache_list = []
 
   def __call__(self, samples, action, mask):

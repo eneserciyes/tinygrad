@@ -32,8 +32,10 @@ class SymLogTwoHotLoss:
     self.upper_bound = upper_bound
     self.bin_length = (upper_bound - lower_bound) / (num_classes-1)
     self.bins = Tensor.full((num_classes,), -20) + Tensor.arange(num_classes) * (40 / (num_classes-1))
+    self.bins.requires_grad = False
 
   def __call__(self, output: Tensor, target: Tensor):
+    breakpoint()
     target = symlog(target)
     assert target.min() > self.lower_bound and target.max() <= self.upper_bound
 
@@ -43,7 +45,7 @@ class SymLogTwoHotLoss:
     weight = weight.clip(0, 1).unsqueeze(-1)
 
     target_prob = (1-weight) * (index-1).one_hot(self.num_classes) + weight * index.one_hot(self.num_classes)
-    return (-target_prob * output.log_softmax(-1)).sum(-1).mean()
+    return (-target_prob.detach() * output.log_softmax(-1)).sum(-1).mean()
 
   def decode(self, output: Tensor):
     return symexp(output.softmax(-1) @ self.bins)

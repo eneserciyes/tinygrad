@@ -1,4 +1,3 @@
-import sys
 from tinygrad import Tensor, nn
 import tinygrad
 from tinygrad.nn.optim import Adam
@@ -134,7 +133,6 @@ class WorldModel:
     self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
 
     self.optimizer = Adam(get_parameters(self), lr=1e-4)
-    # TODO: grad scaler, bf16 training
 
   def encode_obs(self, obs: Tensor) -> Tensor:
     embedding = self.encoder(obs)
@@ -245,12 +243,11 @@ class WorldModel:
     representation_loss, representation_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:], prior_logits[:, :-1].detach(), free_bits=1)
     total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss
 
-    print("total_loss", total_loss.item())
-    sys.exit(0)
     total_loss.backward()
 
-    # TODO: check if grad scaler exists in Tinygrad.
-    # TODO: check how to optimize
+    self.optimizer.step()
+    self.optimizer.zero_grad()
+
     if logger is not None:
       logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())
       logger.log("WorldModel/reward_loss", reward_loss.item())
