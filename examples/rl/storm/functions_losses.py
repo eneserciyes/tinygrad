@@ -35,7 +35,6 @@ class SymLogTwoHotLoss:
     self.bins.requires_grad = False
 
   def __call__(self, output: Tensor, target: Tensor):
-    breakpoint()
     target = symlog(target)
     assert target.min() > self.lower_bound and target.max() <= self.upper_bound
 

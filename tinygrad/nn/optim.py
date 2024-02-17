@@ -55,6 +55,7 @@ class LAMB(Optimizer):
 
   def step(self) -> None:
     self.t.assign(self.t + 1)
+    print("Optimizing this many params: ", len(self.params))
     for i, t in enumerate(self.params):
       assert t.grad is not None
       self.m[i].assign(self.b1 * self.m[i] + (1.0 - self.b1) * t.grad)

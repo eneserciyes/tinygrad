@@ -70,8 +70,6 @@ class ActorCriticAgent:
     self.lowerbound_ema = EMAScalar(decay=0.99)
     self.upperbound_ema = EMAScalar(decay=0.99)
 
-    self.optimizer = Adam(get_parameters(self), lr=3e-5, eps=1e-5)
-
   def update_slow_critic(self, decay=0.98):
     for slow_param, param in zip(get_parameters(self.slow_critic), self.critic):
       # TODO: find how to copy the slow_param to param

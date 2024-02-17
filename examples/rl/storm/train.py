@@ -1,3 +1,4 @@
+import time
 import os
 import colorama
 from collections import deque
@@ -17,6 +18,8 @@ import agents
 
 from tinygrad import Tensor
 from tinygrad.nn.state import safe_save, get_state_dict
+from tinygrad.nn.optim import Adam
+from tinygrad.nn.state import get_parameters
 
 def build_single_env(env_name, image_size, seed):
   env = gymnasium.make(env_name, full_action_space=False, render_mode="rgb_array", frameskip=1)
@@ -35,10 +38,23 @@ def build_vec_env(env_name, image_size, num_envs, seed):
   vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
   return vec_env
 
-def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, demonstration_batch_size, batch_length, logger):
+def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, world_model_opt, batch_size, demonstration_batch_size, batch_length, logger):
   obs, action, reward, termination = replay_buffer.sample(batch_size, demonstration_batch_size, batch_length)
+
   with Tensor.train():
-    world_model.update(obs, action, reward, termination, logger=logger)
+    total_loss = world_model.loss(obs, action, reward, termination, logger=logger)
+
+  tic = time.time()
+  world_model_opt.zero_grad()
+  print(f"zero_grad time: {time.time() - tic:.5f}s")
+
+  tic = time.time()
+  total_loss.backward()
+  print(f"backward time: {time.time() - tic:.5f}s")
+
+  tic = time.time()
+  world_model_opt.step()
+  print(f"step time: {time.time() - tic:.5f}s")
 
 def world_model_imagine_data(replay_buffer: ReplayBuffer, world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
@@ -54,7 +70,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer, world_model: WorldMode
 
 def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                                   replay_buffer: ReplayBuffer,
-                                  world_model: WorldModel, agent: agents.ActorCriticAgent,
+                                  world_model: WorldModel, world_model_opt, agent: agents.ActorCriticAgent, agent_opt,
                                   train_dynamics_every_steps, train_agent_every_steps,
                                   batch_size, demonstration_batch_size, batch_length,
                                   imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
@@ -77,11 +93,11 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
       if len(context_action) == 0:
         action = vec_env.action_space.sample()
       else:
-        context_latent = world_model.encode_obs(context_obs[0].cat(list(context_obs)[1:], dim=1))
+        context_latent = world_model.encode_obs(context_obs[0].cat(*list(context_obs)[1:], dim=1))
         model_context_action = Tensor(np.stack(list(context_action), axis=1))
         prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
         action = agent.sample_as_env_action(
-            prior_flattened_sample.cat(last_dist_feat, dim=1), greedy=False)
+            prior_flattened_sample.cat(last_dist_feat, dim=-1), greedy=False)
 
       context_obs.append(Tensor(current_obs).permute(0, 3, 1, 2).unsqueeze(1) / 255)
       context_action.append(action)
@@ -110,6 +126,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
       train_world_model_step(
         replay_buffer=replay_buffer,
         world_model=world_model,
+        world_model_opt=world_model_opt,
         batch_size=batch_size,
         demonstration_batch_size=demonstration_batch_size,
         batch_length=batch_length,
@@ -117,20 +134,20 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
       )
 
     # train agent part >>>
-    if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
-      if total_steps % (save_every_steps//num_envs) == 0:
-        log_video = True
-      else:
-        log_video = False
+    # if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
+    #   if total_steps % (save_every_steps//num_envs) == 0:
+    #     log_video = True
+    #   else:
+    #     log_video = False
 
-      imagine_latent, agent_action, agent_logprob, agent_value, imagine_reward, imagine_termination = world_model_imagine_data(
-        replay_buffer=replay_buffer, world_model=world_model, agent=agent, imagine_batch_size=imagine_batch_size,
-        imagine_demonstration_batch_size=imagine_demonstration_batch_size,
-        imagine_context_length=imagine_context_length, imagine_batch_length=imagine_batch_length,
-        log_video=log_video, logger=logger
-      )
+    #   imagine_latent, agent_action, _, _, imagine_reward, imagine_termination = world_model_imagine_data(
+    #     replay_buffer=replay_buffer, world_model=world_model, agent=agent, imagine_batch_size=imagine_batch_size,
+    #     imagine_demonstration_batch_size=imagine_demonstration_batch_size,
+    #     imagine_context_length=imagine_context_length, imagine_batch_length=imagine_batch_length,
+    #     log_video=log_video, logger=logger
+    #   )
 
-      agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
+    #   agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
 
     if total_steps % (save_every_steps//num_envs) == 0:
       print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
@@ -184,7 +201,10 @@ if __name__ == "__main__":
   del dummy_env
 
   world_model = build_world_model(conf, action_dim)
+  world_model_opt = Adam(get_parameters(world_model), lr=1e-4)
+
   agent = build_agent(conf, action_dim)
+  agent_opt = Adam(get_parameters(agent), lr=3e-5, eps=1e-5)
 
   replay_buffer = ReplayBuffer(
       obs_shape=(conf.basic_settings.image_size, conf.basic_settings.image_size, 3),
@@ -200,7 +220,7 @@ if __name__ == "__main__":
   joint_train_world_model_agent(
     env_name=args.env_name, num_envs=conf.joint_train_agent.num_envs,
     max_steps=conf.joint_train_agent.sample_max_steps, image_size=conf.basic_settings.image_size,
-    replay_buffer=replay_buffer, world_model=world_model, agent=agent,
+    replay_buffer=replay_buffer, world_model=world_model, world_model_opt=world_model_opt, agent=agent, agent_opt=agent_opt,
     train_dynamics_every_steps=conf.joint_train_agent.train_dynamics_every_steps,
     train_agent_every_steps=conf.joint_train_agent.train_agent_every_steps,
     batch_size=conf.joint_train_agent.batch_size,

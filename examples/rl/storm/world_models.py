@@ -1,7 +1,9 @@
+import time
+
+from regex import W
 from tinygrad import Tensor, nn
 import tinygrad
-from tinygrad.nn.optim import Adam
-from tinygrad.nn.state import get_parameters
+
 
 from transformer_model import StochasticTransformerKVCache
 from distributions import kl_categorical_with_free_bits
@@ -132,7 +134,6 @@ class WorldModel:
 
     self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
 
-    self.optimizer = Adam(get_parameters(self), lr=1e-4)
 
   def encode_obs(self, obs: Tensor) -> Tensor:
     embedding = self.encoder(obs)
@@ -215,7 +216,8 @@ class WorldModel:
 
     return self.latent_buffer.cat(self.hidden_buffer, dim=-1), self.action_buffer, self.reward_hat_buffer, self.termination_hat_buffer
 
-  def update(self, obs: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
+  def loss(self, obs: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
+    tic = time.time()
     _, batch_length = obs.shape[:2]
     embedding = self.encoder(obs)
     post_logits = self.dist_head.forward_post(embedding)
@@ -242,11 +244,7 @@ class WorldModel:
     dynamics_loss, dynamics_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:].detach(), prior_logits[:, :-1], free_bits=1)
     representation_loss, representation_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:], prior_logits[:, :-1].detach(), free_bits=1)
     total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss
-
-    total_loss.backward()
-
-    self.optimizer.step()
-    self.optimizer.zero_grad()
+    print(f"forward time: {time.time() - tic:.5f}s")
 
     if logger is not None:
       logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())
@@ -257,6 +255,7 @@ class WorldModel:
       logger.log("WorldModel/representation_loss", representation_loss.item())
       logger.log("WorldModel/representation_real_kl_div", representation_real_kl_div.item())
       logger.log("WorldModel/total_loss", total_loss.item())
+    return total_loss
 
 
 
