@@ -1,6 +1,7 @@
 import time
+from turtle import back
+from typing import Callable, List, cast
 
-from regex import W
 from tinygrad import Tensor, nn
 import tinygrad
 
@@ -40,32 +41,31 @@ class EncoderBN:
 
 class DecoderBN:
   def __init__(self, stoch_dim: int, last_channels: int, original_in_channels: int, stem_channels: int, final_feature_width: int) -> None:
-    self.stem_in = Tensor.scaled_uniform(stoch_dim, last_channels*final_feature_width*final_feature_width)
-    self.bn_in = nn.BatchNorm2d(last_channels)
-    self.last_channels = last_channels
-    self.final_feature_width = final_feature_width
+    backbone: List[Callable] = []
+    backbone=[
+      nn.Linear(stoch_dim, last_channels*final_feature_width*final_feature_width, bias=False),
+      lambda x: x.reshape(x.shape[0]*x.shape[1], last_channels, final_feature_width, -1),
+      nn.BatchNorm2d(last_channels),
+      lambda x: x.relu(),
+    ]
     channels = last_channels
     feat_width = final_feature_width
 
-    self.convs = []
-    self.bns = []
     while True:
       if channels == stem_channels: break
-      self.convs.append(nn.ConvTranspose2d(channels, channels//2, 4, 2, 1, bias=False))
+      backbone.append(nn.ConvTranspose2d(channels, channels//2, 4, 2, 1, bias=False))
       channels //= 2
       feat_width *= 2
-      self.bns.append(nn.BatchNorm2d(channels))
+      backbone.append(nn.BatchNorm2d(channels))
+      backbone.append(lambda x: x.relu())
 
-    self.conv_out = nn.ConvTranspose2d(stem_channels, original_in_channels, 4, 2, 1)
+    backbone.append(nn.ConvTranspose2d(stem_channels, original_in_channels, 4, 2, 1))
+    self.backbone = backbone
 
   def __call__(self, sample: Tensor) -> Tensor:
-    B, L = sample.shape[0], sample.shape[1]
-    stem = sample.linear(self.stem_in).reshape(B*L, self.last_channels, self.final_feature_width, -1)
-    obs_hat = self.bn_in(stem).relu()
-    for (conv, bn) in zip(self.convs, self.bns):
-      obs_hat = bn(conv(obs_hat)).relu()
-    obs_hat = self.conv_out(obs_hat)
-    return obs_hat.reshape(B, L, *obs_hat.shape[1:])
+    B = sample.shape[0]
+    obs_hat = sample.sequential(self.backbone)
+    return obs_hat.reshape(B, -1, *obs_hat.shape[1:])
 
 class DistHead:
   def __init__(self, image_feat_dim: int, transformer_hidden_dim: int, stoch_dim: int) -> None:
@@ -90,23 +90,33 @@ class DistHead:
 
 class RewardDecoder:
   def __init__(self, num_classes:int, transformer_hidden_dim:int) -> None:
-    self.l1 = Tensor.scaled_uniform(transformer_hidden_dim, transformer_hidden_dim)
-    self.l2 = Tensor.scaled_uniform(transformer_hidden_dim, transformer_hidden_dim)
+    self.backbone: List[Callable] = [
+      nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
+      nn.LayerNorm(transformer_hidden_dim),
+      lambda x: x.relu(),
+      nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
+      nn.LayerNorm(transformer_hidden_dim),
+      lambda x: x.relu(),
+    ]
     self.head = nn.Linear(transformer_hidden_dim, num_classes)
 
   def __call__(self,  feat:Tensor) -> Tensor:
-    x = feat.linear(self.l1).layernorm().relu().linear(self.l2).layernorm().relu()
-    return self.head(x)
+    return self.head(feat.sequential(self.backbone))
 
 class TerminationDecoder:
   def __init__(self, transformer_hidden_dim:int) -> None:
-    self.l1 = Tensor.scaled_uniform(transformer_hidden_dim, transformer_hidden_dim)
-    self.l2 = Tensor.scaled_uniform(transformer_hidden_dim, transformer_hidden_dim)
+    self.backbone: List[Callable] = [
+      nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
+      nn.LayerNorm(transformer_hidden_dim),
+      lambda x: x.relu(),
+      nn.Linear(transformer_hidden_dim, transformer_hidden_dim, bias=False),
+      nn.LayerNorm(transformer_hidden_dim),
+      lambda x: x.relu(),
+    ]
     self.head = nn.Linear(transformer_hidden_dim, 1)
 
   def __call__(self, feat:Tensor) -> Tensor:
-    x = feat.linear(self.l1).layernorm().relu().linear(self.l2).layernorm().relu()
-    return self.head(x).squeeze(-1)
+    return self.head(feat.sequential(self.backbone)).squeeze(-1)
 
 
 class WorldModel:
@@ -144,7 +154,7 @@ class WorldModel:
   def straight_through_gradient(self, logits: Tensor) -> Tensor:
     probs = logits.softmax()
     s: Tensor = (probs.cumsum(-1) > Tensor.rand(*probs.shape[:-1], 1)).argmax(-1)
-    s = s.one_hot(s.shape[-1])
+    s = s.one_hot(cast(int, s.shape[-1]))
     return s.detach() + probs - probs.detach()
 
   def calc_last_dist_feat(self, latent: Tensor, action: Tensor):

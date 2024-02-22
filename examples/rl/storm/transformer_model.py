@@ -1,3 +1,4 @@
+from typing import Callable, List
 import tinygrad
 from tinygrad import Tensor, nn
 
@@ -29,18 +30,24 @@ class StochasticTransformerKVCache:
     self.action_dim = action_dim
     self.feat_dim = feat_dim
 
-    self.stem1 = Tensor.scaled_uniform(stoch_dim+action_dim, feat_dim)
-    self.stem2 = Tensor.scaled_uniform(feat_dim, feat_dim)
+    self.stem: List[Callable] = [
+      nn.Linear(stoch_dim+action_dim, feat_dim, bias=False),
+      nn.LayerNorm(feat_dim),
+      lambda x: x.relu(),
+      nn.Linear(feat_dim, feat_dim, bias=False),
+      nn.LayerNorm(feat_dim),
+    ]
     self.position_encoding = PositionalEncoding1D(max_length, embed_dim=feat_dim)
     self.layer_stack = [
         AttentionBlockKVCache(feat_dim=feat_dim, hidden_dim=feat_dim*2, num_heads=num_heads, dropout=dropout) for _ in range(num_layers)
     ]
-    self.kv_cache_list = []
+    self.layer_norm = nn.LayerNorm(feat_dim, eps=1e-6)
+    self.kv_cache_list: List[Tensor] = []
 
-  def __call__(self, samples, action, mask):
+  def __call__(self, samples:Tensor, action:Tensor, mask:Tensor):
     action = action.cast(tinygrad.dtypes.long).one_hot(self.action_dim).float()
     feats = samples.cat(action, dim=-1)
-    feats = feats.linear(self.stem1).layernorm().relu().linear(self.stem2).layernorm()
+    feats = feats.sequential(self.stem)
     feats = self.position_encoding(feats).layernorm()
 
     for layer in self.layer_stack:
@@ -59,8 +66,9 @@ class StochasticTransformerKVCache:
 
     action = action.cast(tinygrad.dtypes.long).one_hot(self.action_dim).float()
     feats = samples.cat(action, dim=-1)
-    feats = feats.linear(self.stem1).layernorm().relu().linear(self.stem2).layernorm()
-    feats = self.position_encoding.forward_with_position(feats, position=self.kv_cache_list[0].shape[1]).layernorm()
+    feats = feats.sequential(self.stem)
+    feats = self.position_encoding.forward_with_position(feats, position=self.kv_cache_list[0].shape[1])
+    feats = self.layer_norm(feats)
 
     for i, layer in enumerate(self.layer_stack):
       self.kv_cache_list[i] = self.kv_cache_list[i].cat(feats, dim=1)

@@ -7,19 +7,20 @@ class MultiHeadAttention:
     self.d_v = d_v
     self.dropout = dropout
 
-    self.query = nn.Linear(d_model, n_head * d_k, bias=False)
-    self.key = nn.Linear(d_model, n_head * d_k, bias=False)
-    self.value = nn.Linear(d_model, n_head * d_v, bias=False)
+    self.w_qs = nn.Linear(d_model, n_head * d_k, bias=False)
+    self.w_ks = nn.Linear(d_model, n_head * d_k, bias=False)
+    self.w_vs = nn.Linear(d_model, n_head * d_v, bias=False)
     self.fc = nn.Linear(n_head * d_v, d_model, bias=False)
+    self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
 
   def __call__(self, q, k, v, mask=None):
     d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
-    bs, qs, ks, vs = q.shape[0], q.shape[1], k.shape[1], v.shape[1]
+    sz_b, len_q, len_k, len_v = q.shape[0], q.shape[1], k.shape[1], v.shape[1]
 
     residual = q
-    q = self.query(q).reshape(bs, qs, n_head, d_k)
-    k = self.key(k).reshape(bs, ks, n_head, d_k)
-    v = self.value(v).reshape(bs, vs, n_head, d_v)
+    q = self.w_qs(q).reshape(sz_b, len_q, n_head, d_k)
+    k = self.w_ks(k).reshape(sz_b, len_k, n_head, d_k)
+    v = self.w_vs(v).reshape(sz_b, len_v, n_head, d_v)
 
     q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
@@ -27,20 +28,21 @@ class MultiHeadAttention:
 
     q = Tensor.scaled_dot_product_attention(q, k, v, mask)
 
-    q = q.transpose(1, 2).contiguous().reshape(bs, qs, -1)
+    q = q.transpose(1, 2).contiguous().reshape(sz_b, len_q, -1)
     q = self.fc(q).dropout(self.dropout) + residual
 
-    return q.layernorm()
+    return self.layer_norm(q) 
 
 class PositionwiseFeedForward:
   def __init__(self, d_in, d_hid, dropout=0.1):
-    self.fc1 = (Tensor.scaled_uniform(d_in, d_hid), Tensor.zeros(d_hid))
-    self.fc2 = (Tensor.scaled_uniform(d_hid, d_in), Tensor.zeros(d_in))
+    self.w_1 = nn.Linear(d_in, d_hid) 
+    self.w_2 = nn.Linear(d_hid, d_in)
+    self.layer_norm = nn.LayerNorm(d_in, eps=1e-6)
     self.dropout = dropout
 
   def __call__(self, x):
-    x = x + x.linear(*self.fc1).relu().linear(*self.fc2).dropout(self.dropout)
-    return x.layernorm()
+    x = x + x.linear(*self.w_1).relu().linear(*self.w_2).dropout(self.dropout)
+    return self.layer_norm(x) 
 
 class AttentionBlock:
   def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
