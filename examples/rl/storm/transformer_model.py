@@ -1,4 +1,5 @@
 from typing import Callable, List
+
 import tinygrad
 from tinygrad import Tensor, nn
 
@@ -46,9 +47,9 @@ class StochasticTransformerKVCache:
 
   def __call__(self, samples:Tensor, action:Tensor, mask:Tensor):
     action = action.cast(tinygrad.dtypes.long).one_hot(self.action_dim).float()
-    feats = samples.cat(action, dim=-1)
-    feats = feats.sequential(self.stem)
-    feats = self.position_encoding(feats).layernorm()
+    feats = samples.cat(action, dim=-1).sequential(self.stem)
+    feats = self.position_encoding(feats)
+    feats = self.layer_norm(feats)
 
     for layer in self.layer_stack:
       feats = layer(feats, feats, feats, mask)
@@ -65,8 +66,7 @@ class StochasticTransformerKVCache:
     mask = Tensor.ones((1, 1, self.kv_cache_list[0].shape[1]+1)) == 1
 
     action = action.cast(tinygrad.dtypes.long).one_hot(self.action_dim).float()
-    feats = samples.cat(action, dim=-1)
-    feats = feats.sequential(self.stem)
+    feats = samples.cat(action, dim=-1).sequential(self.stem)
     feats = self.position_encoding.forward_with_position(feats, position=self.kv_cache_list[0].shape[1])
     feats = self.layer_norm(feats)
 
