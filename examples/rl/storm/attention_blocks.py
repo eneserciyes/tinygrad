@@ -41,7 +41,7 @@ class PositionwiseFeedForward:
     self.dropout = dropout
 
   def __call__(self, x):
-    x = x + x.linear(*self.w_1).relu().linear(*self.w_2).dropout(self.dropout)
+    x = x + self.w_2(self.w_1(x).relu()).dropout(self.dropout)
     return self.layer_norm(x) 
 
 class AttentionBlock:

@@ -84,8 +84,8 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
   # reset envs and variables
   sum_reward = np.zeros(num_envs)
   current_obs, current_info = vec_env.reset()
-  context_obs = deque(maxlen=16)
-  context_action = deque(maxlen=16)
+  context_obs: deque = deque(maxlen=16)
+  context_action: deque = deque(maxlen=16)
 
   for total_steps in tqdm(range(max_steps//num_envs)):
     if replay_buffer.ready():
