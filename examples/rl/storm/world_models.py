@@ -1,10 +1,8 @@
 import time
-from turtle import back
 from typing import Callable, List, cast
 
 from tinygrad import Tensor, nn
 import tinygrad
-
 
 from transformer_model import StochasticTransformerKVCache
 from distributions import kl_categorical_with_free_bits
@@ -14,29 +12,29 @@ import agents
 
 class EncoderBN:
   def __init__(self, in_channels: int, stem_channels: int, final_feature_width: int) -> None:
-    self.conv_in = nn.Conv2d(in_channels, stem_channels, 4,  2, 1, bias=False)
-    self.bn_in = nn.BatchNorm2d(stem_channels)
+    backbone: List[Callable] = []
+    backbone.append(nn.Conv2d(in_channels, stem_channels, 4,  2, 1, bias=False))
     feature_width = 32
     channels = stem_channels
+    backbone.append(nn.BatchNorm2d(stem_channels))
+    backbone.append(lambda x: x.relu())
 
-    self.convs = []
-    self.bns = []
     while True:
-      self.convs.append(nn.Conv2d(channels, channels*2, 4, 2, 1, bias=False))
+      backbone.append(nn.Conv2d(channels, channels*2, 4, 2, 1, bias=False))
       channels *= 2
       feature_width //= 2
-      self.bns.append(nn.BatchNorm2d(channels))
+      backbone.append(nn.BatchNorm2d(channels))
+      backbone.append(lambda x: x.relu())
       if feature_width == final_feature_width:
         break
 
+    self.backbone = backbone
     self.last_channels = channels
 
   def __call__(self, x: Tensor) -> Tensor:
     B, L = x.shape[0], x.shape[1]
     x = x.reshape(B*L, *x.shape[2:])
-    x = self.bn_in(self.conv_in(x)).relu()
-    for (conv, bn) in zip(self.convs, self.bns):
-      x = bn(conv(x)).relu()
+    x = x.sequential(self.backbone)
     return x.reshape(B, L, -1)
 
 class DecoderBN:
@@ -113,10 +111,10 @@ class TerminationDecoder:
       nn.LayerNorm(transformer_hidden_dim),
       lambda x: x.relu(),
     ]
-    self.head = nn.Linear(transformer_hidden_dim, 1)
+    self.head = [nn.Linear(transformer_hidden_dim, 1)]
 
   def __call__(self, feat:Tensor) -> Tensor:
-    return self.head(feat.sequential(self.backbone)).squeeze(-1)
+    return feat.sequential(self.backbone).sequential(self.head).squeeze(-1)
 
 
 class WorldModel:
