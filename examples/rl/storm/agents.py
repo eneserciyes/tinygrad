@@ -4,6 +4,7 @@ from functions_losses import SymLogTwoHotLoss
 from tinygrad import Tensor, nn
 from tinygrad.nn.state import get_parameters
 import tinygrad
+import numpy as np
 
 class EMAScalar:
     def __init__(self, decay) -> None:
@@ -23,9 +24,7 @@ class EMAScalar:
 def percentile(x:Tensor, percentage):
   flat_x = x.flatten()
   kth = int(flat_x.shape[0] * percentage)
-  # TODO: implement kth value
-  # TODO: implement quickselect for Tensor
-  return flat_x[kth]
+  return np.partition(flat_x.numpy(), kth)[kth]
 
 def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=tinygrad.dtypes.float32):
   inv_termination = 1 - termination
@@ -123,7 +122,7 @@ class ActorCriticAgent:
     slow_value = self.slow_value(latent)
     slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
     value = self.symlog_twohot_loss.decode(raw_value)
-    lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
+    lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd).realize()
 
     value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
     slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
@@ -138,7 +137,6 @@ class ActorCriticAgent:
     entropy_loss = entropy.mean()
 
     loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
-    loss.realize()
 
     if logger is not None:
       logger.log('ActorCritic/policy_loss', policy_loss.item())
@@ -147,5 +145,5 @@ class ActorCriticAgent:
       logger.log('ActorCritic/S', S.item())
       logger.log('ActorCritic/norm_ratio', norm_ratio.item())
       logger.log('ActorCritic/total_loss', loss.item())
-    return loss
+    return loss.realize()
 
