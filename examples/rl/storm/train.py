@@ -1,4 +1,3 @@
-import time
 import os
 import colorama
 from collections import deque
@@ -44,21 +43,14 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
   with Tensor.train():
     total_loss = world_model.loss(obs, action, reward, termination, logger=logger)
 
-  tic = time.time()
   world_model_opt.zero_grad()
-  print(f"zero_grad time: {time.time() - tic:.5f}s")
-
-  tic = time.time()
   total_loss.backward()
-  print(f"backward time: {time.time() - tic:.5f}s")
-
-  tic = time.time()
   world_model_opt.step()
-  print(f"step time: {time.time() - tic:.5f}s")
 
 def world_model_imagine_data(replay_buffer: ReplayBuffer, world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length,
                              imagine_batch_length, log_video, logger):
+  Tensor.no_grad = True
   sample_obs, sample_action, _, _ = replay_buffer.sample(
       imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length)
   latent, action, reward_hat, termination_hat = world_model.imagine_data(
@@ -66,6 +58,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer, world_model: WorldMode
       imagine_batch_size=imagine_batch_size+imagine_demonstration_batch_size,
       imagine_batch_length=imagine_batch_length,
       log_video=log_video, logger=logger)
+  Tensor.no_grad = False
   return latent, action, None, None, reward_hat, termination_hat
 
 def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
@@ -134,20 +127,20 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
       )
 
     # train agent part >>>
-    # if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
-    #   if total_steps % (save_every_steps//num_envs) == 0:
-    #     log_video = True
-    #   else:
-    #     log_video = False
+    if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
+      if total_steps % (save_every_steps//num_envs) == 0:
+        log_video = True
+      else:
+        log_video = False
 
-    #   imagine_latent, agent_action, _, _, imagine_reward, imagine_termination = world_model_imagine_data(
-    #     replay_buffer=replay_buffer, world_model=world_model, agent=agent, imagine_batch_size=imagine_batch_size,
-    #     imagine_demonstration_batch_size=imagine_demonstration_batch_size,
-    #     imagine_context_length=imagine_context_length, imagine_batch_length=imagine_batch_length,
-    #     log_video=log_video, logger=logger
-    #   )
+      imagine_latent, agent_action, _, _, imagine_reward, imagine_termination = world_model_imagine_data(
+        replay_buffer=replay_buffer, world_model=world_model, agent=agent, imagine_batch_size=imagine_batch_size,
+        imagine_demonstration_batch_size=imagine_demonstration_batch_size,
+        imagine_context_length=imagine_context_length, imagine_batch_length=imagine_batch_length,
+        log_video=log_video, logger=logger
+      )
 
-    #   agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
+      agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
 
     if total_steps % (save_every_steps//num_envs) == 0:
       print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)

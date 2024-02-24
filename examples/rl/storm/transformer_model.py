@@ -59,7 +59,7 @@ class StochasticTransformerKVCache:
   def reset_kv_cache_list(self, batch_size, dtype):
     self.kv_cache_list = []
     for _ in self.layer_stack:
-      self.kv_cache_list.append(Tensor.zeros((batch_size, 0, self.feat_dim), dtype=dtype))
+      self.kv_cache_list.append(Tensor.zeros((batch_size, 0, self.feat_dim), dtype=dtype).realize())
 
   def forward_with_kv_cache(self, samples, action):
     assert samples.shape[1] == 1
@@ -71,7 +71,7 @@ class StochasticTransformerKVCache:
     feats = self.layer_norm(feats)
 
     for i, layer in enumerate(self.layer_stack):
-      self.kv_cache_list[i] = self.kv_cache_list[i].cat(feats, dim=1)
+      self.kv_cache_list[i] = self.kv_cache_list[i].cat(feats, dim=1).realize()
       feats = layer(feats, self.kv_cache_list[i], self.kv_cache_list[i], mask)
 
     return feats

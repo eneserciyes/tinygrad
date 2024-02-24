@@ -2,10 +2,8 @@ import copy
 from examples.rl.storm.distributions import Categorical
 from functions_losses import SymLogTwoHotLoss
 from tinygrad import Tensor, nn
-from tinygrad.nn.optim import Adam
 from tinygrad.nn.state import get_parameters
 import tinygrad
-
 
 class EMAScalar:
     def __init__(self, decay) -> None:
@@ -93,60 +91,54 @@ class ActorCriticAgent:
     return self.symlog_twohot_loss.decode(value)
 
   def slow_value(self, x:Tensor):
-    x.requires_grad = False
+    Tensor.no_grad = True
     for layer in self.slow_critic:
       x = layer(x).layernorm().relu()
     value = self.slow_value_out(x)
-    return self.symlog_twohot_loss.decode(value)
+    value = self.symlog_twohot_loss.decode(value)
+    Tensor.no_grad = False
+    return value
 
   def get_logits_raw_value(self, x):
     return self.policy(x), self.critic_fn(x)
 
   def sample(self, latent: Tensor, greedy=False):
-    latent.requires_grad = False # TODO: check if this is enough
-    # TODO: autocast
+    Tensor.no_grad = True
     logits = self.policy(latent)
     dist = Categorical(logits)
     action = dist.probs.argmax(-1) if greedy else dist.sample()
+    Tensor.no_grad = False
     return action
 
   def sample_as_env_action(self, latent: Tensor, greedy=False):
     action = self.sample(latent, greedy)
     return action.detach().squeeze(-1).numpy()
 
-  def update(self, latent: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
-    with Tensor.train():
-      # TODO: autocast
-      logits, raw_value = self.get_logits_raw_value(latent)
-      dist = Categorical(logits[:, :-1])
-      log_prob = dist.log_prob(action) # TODO: implement log_probs for dist
-      entropy = dist.entropy() # TODO: implement entropy for dist
+  def loss(self, latent: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
+    logits, raw_value = self.get_logits_raw_value(latent)
+    dist = Categorical(logits[:, :-1])
+    log_prob = dist.log_prob(action) # TODO: implement log_probs for dist
+    entropy = dist.entropy() # TODO: implement entropy for dist
 
-      slow_value = self.slow_value(latent)
-      slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
-      value = self.symlog_twohot_loss.decode(raw_value)
-      lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
+    slow_value = self.slow_value(latent)
+    slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
+    value = self.symlog_twohot_loss.decode(raw_value)
+    lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
 
-      value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
-      slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
+    value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
+    slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
 
-      lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
-      upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
-      S = upper_bound - lower_bound
-      norm_ratio = S.max(Tensor.ones(1))
-      norm_advantage = (lambda_return - value[:, :-1]) / norm_ratio
-      policy_loss = -(log_prob * norm_advantage.detach()).mean()
+    lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
+    upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
+    S = upper_bound - lower_bound
+    norm_ratio = S.max(Tensor.ones(1))
+    norm_advantage = (lambda_return - value[:, :-1]) / norm_ratio
+    policy_loss = -(log_prob * norm_advantage.detach()).mean()
 
-      entropy_loss = entropy.mean()
+    entropy_loss = entropy.mean()
 
-      loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
-
-    loss.backward() # TODO: grad scaler if autocast is used
-    # TODO: clip gradients
-    self.optimizer.step()
-    self.optimizer.zero_grad()
-
-    self.update_slow_critic()
+    loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
+    loss.realize()
 
     if logger is not None:
       logger.log('ActorCritic/policy_loss', policy_loss.item())
@@ -155,4 +147,5 @@ class ActorCriticAgent:
       logger.log('ActorCritic/S', S.item())
       logger.log('ActorCritic/norm_ratio', norm_ratio.item())
       logger.log('ActorCritic/total_loss', loss.item())
+    return loss
 

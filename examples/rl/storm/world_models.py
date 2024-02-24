@@ -34,7 +34,7 @@ class EncoderBN:
   def __call__(self, x: Tensor) -> Tensor:
     B, L = x.shape[0], x.shape[1]
     x = x.reshape(B*L, *x.shape[2:])
-    x = x.sequential(self.backbone)
+    x = x.sequential(self.backbone).realize()
     return x.reshape(B, L, -1)
 
 class DecoderBN:
@@ -62,7 +62,7 @@ class DecoderBN:
 
   def __call__(self, sample: Tensor) -> Tensor:
     B = sample.shape[0]
-    obs_hat = sample.sequential(self.backbone)
+    obs_hat = sample.sequential(self.backbone).realize()
     return obs_hat.reshape(B, -1, *obs_hat.shape[1:])
 
 class DistHead:
@@ -152,7 +152,7 @@ class WorldModel:
   def straight_through_gradient(self, logits: Tensor) -> Tensor:
     probs = logits.softmax()
     s: Tensor = (probs.cumsum(-1) > Tensor.rand(*probs.shape[:-1], 1)).argmax(-1)
-    s = s.one_hot(cast(int, s.shape[-1]))
+    s = s.one_hot(cast(int, s.shape[-1])).realize()
     return s.detach() + probs - probs.detach()
 
   def calc_last_dist_feat(self, latent: Tensor, action: Tensor):
@@ -225,7 +225,6 @@ class WorldModel:
     return self.latent_buffer.cat(self.hidden_buffer, dim=-1), self.action_buffer, self.reward_hat_buffer, self.termination_hat_buffer
 
   def loss(self, obs: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
-    tic = time.time()
     _, batch_length = obs.shape[:2]
     embedding = self.encoder(obs)
     post_logits = self.dist_head.forward_post(embedding)
@@ -236,7 +235,7 @@ class WorldModel:
     obs_hat = self.image_decoder(flattened_sample)
 
     # transformer
-    temporal_mask = (1 - Tensor.triu(Tensor.ones(1, batch_length, batch_length), k=1)) == 1
+    temporal_mask = ((1 - Tensor.triu(Tensor.ones(1, batch_length, batch_length), k=1)) == 1).realize()
     dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
     prior_logits = self.dist_head.forward_prior(dist_feat)
     reward_hat = self.reward_decoder(dist_feat)
@@ -251,8 +250,7 @@ class WorldModel:
     # dyn-rep loss
     dynamics_loss, dynamics_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:].detach(), prior_logits[:, :-1], free_bits=1)
     representation_loss, representation_real_kl_div = kl_categorical_with_free_bits(post_logits[:, 1:], prior_logits[:, :-1].detach(), free_bits=1)
-    total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss
-    print(f"forward time: {time.time() - tic:.5f}s")
+    total_loss = (reconstruction_loss + reward_loss + termination_loss + 0.5 * dynamics_loss + 0.1 * representation_loss).realize()
 
     if logger is not None:
       logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())

@@ -31,7 +31,7 @@ class MultiHeadAttention:
     q = q.transpose(1, 2).contiguous().reshape(sz_b, len_q, -1)
     q = self.fc(q).dropout(self.dropout) + residual
 
-    return self.layer_norm(q) 
+    return self.layer_norm(q)
 
 class PositionwiseFeedForward:
   def __init__(self, d_in, d_hid, dropout=0.1):
@@ -52,7 +52,7 @@ class AttentionBlock:
   def __call__(self, enc_input, slf_attn_mask=None):
     enc_output = self.slf_attn(enc_input, enc_input, enc_input, slf_attn_mask)
     enc_output = self.pos_ffn(enc_output)
-    return enc_output
+    return enc_output.realize()
 
 class AttentionBlockKVCache:
   def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
@@ -62,7 +62,7 @@ class AttentionBlockKVCache:
   def __call__(self, q, k, v, slf_attn_mask=None):
     enc_output = self.slf_attn(q, k, v, slf_attn_mask)
     enc_output = self.pos_ffn(enc_output)
-    return enc_output
+    return enc_output.realize()
 
 class PositionalEncoding1D:
   def __init__(self, max_length: int, embed_dim: int):
