@@ -77,7 +77,6 @@ class PositionalEncoding1D:
 
   def forward_with_position(self, feat, position):
     assert feat.shape[1] == 1
-    pos_emb = self.pos_emb(Tensor.arange(self.max_length))
-    pos_emb = pos_emb.unsqueeze(0).repeat((feat.shape[0], 1, 1))
+    pos_emb = self.pos_emb(Tensor.arange(self.max_length).unsqueeze(0).repeat((feat.shape[0], 1)))
     return feat + pos_emb[:, position:position+1, :]
 
