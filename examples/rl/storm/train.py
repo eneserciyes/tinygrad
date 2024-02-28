@@ -140,7 +140,8 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
         log_video=log_video, logger=logger
       )
 
-      agent.update(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
+      with Tensor.train():
+        loss = agent.loss(latent=imagine_latent, action=agent_action, reward=imagine_reward, termination=imagine_termination, logger=logger)
 
     if total_steps % (save_every_steps//num_envs) == 0:
       print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)

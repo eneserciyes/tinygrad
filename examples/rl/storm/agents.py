@@ -116,8 +116,8 @@ class ActorCriticAgent:
   def loss(self, latent: Tensor, action: Tensor, reward: Tensor, termination: Tensor, logger=None):
     logits, raw_value = self.get_logits_raw_value(latent)
     dist = Categorical(logits[:, :-1])
-    log_prob = dist.log_prob(action) # TODO: implement log_probs for dist
-    entropy = dist.entropy() # TODO: implement entropy for dist
+    log_prob = dist.log_prob(action)
+    entropy = dist.entropy() 
 
     slow_value = self.slow_value(latent)
     slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
